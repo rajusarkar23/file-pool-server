@@ -2,6 +2,7 @@ import { Query } from "node-appwrite";
 import { database } from "../utils/appwriteDBConnection";
 import jwt from "jsonwebtoken"
 import bcrypt from "bcryptjs"
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 const DATABASE_ID = process.env.DATABASE_ID;
 const COLLECTION_ID = process.env.COLLECTION_ID
@@ -107,9 +108,61 @@ const login = async (req:any, res:any) => {
             return res.status(400).json({success: false, message: "Wrong creedentials"})
         }
         const jwt_token = jwt.sign({userId: findUserByUsername.documents[0].$id}, `${process.env.JWT_TOKEN_SESSION_SECRET}`, {expiresIn: "60m"})
-        return res.cookie("session_token", jwt_token).status(200).json({success: true, message: "Login success"})
+        return res.cookie("session_token", jwt_token).status(200).json({success: true, message: "Login success", jwt_token})
     }
 }
 
 // upload files
-export {register, login}
+const upload = async (req:any, res:any) => {
+    // initialize a s3client
+    const s3Client = new S3Client({
+        region: "auto",
+        endpoint: `${process.env.CLOUDFLARE_ENDPOINT}`,
+        credentials: {
+            accessKeyId: process.env.CLOUDFLARE_ACCESS_KEY_ID || "",
+            secretAccessKey: process.env.CLOUDFLARE_SECRET_ACCESS_KEY || "",
+        },
+        forcePathStyle: true
+    })
+    
+        try {
+            // check if file exists or not
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({success: false, message: "No file available"})
+            }
+
+            // check if envs available or not
+            if (!process.env.CLOUDFLARE_BUCKET_NAME || !process.env.CLOUDFLARE_PUBLIC_URL) {
+                return res.status(400).json({message: "Required envs missing"})
+            }
+
+            // intialize a uploaded files array
+            const uploadedFiles = []
+
+            for (const file of req.files) { // for each file of req.files
+                const fileName = file.originalname // set the file name
+                // upload parameters
+                const uploadParams = {
+                    Bucket: process.env.CLOUDFLARE_BUCKET_NAME,
+                    Key: fileName,
+                    Body: file.buffer,
+                    ContentType: file.mimetype
+                }
+                console.log(uploadParams);
+                //send req to upload files
+                await s3Client.send( new PutObjectCommand(uploadParams))
+                // set url to return it to the db
+                const url = `${process.env.CLOUDFLARE_PUBLIC_URL}/${fileName}`;
+                // push the url and file name to the array
+                uploadedFiles.push({fileName, url})
+            }
+          
+            return res.status(200).json({message: "Uploaded", uploadedFiles})
+
+        } catch (error) {
+            console.log(error);
+            
+        }
+    
+}
+export {register, login, upload}
